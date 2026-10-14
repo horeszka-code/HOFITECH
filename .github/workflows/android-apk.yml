@@ -16,11 +16,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Android SDK packages
+      - name: Install Android SDK command line tools
         run: |
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
+          mkdir -p "$ANDROID_HOME/cmdline-tools" /tmp/smartmic-tools
+          curl -fLsS https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/smartmic-tools.zip
+          unzip -q /tmp/smartmic-tools.zip -d /tmp/smartmic-tools
+          rm -rf "$ANDROID_HOME/cmdline-tools/smartmic"
+          mv /tmp/smartmic-tools/cmdline-tools "$ANDROID_HOME/cmdline-tools/smartmic"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/smartmic/bin/sdkmanager"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "platforms;android-35" "build-tools;35.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
