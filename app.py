@@ -3,17 +3,62 @@ import asyncio, os, secrets, tempfile, subprocess
 from pathlib import Path
 import numpy as np
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response, JSONResponse
+import struct, zlib
 from scipy.signal import butter, sosfiltfilt, find_peaks, correlate
 from scipy.ndimage import gaussian_filter1d
 app = FastAPI(docs_url=None, redoc_url=None)
 STROKE_L = 0.793
 ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
 MAX_MB = 65
-UI = """<!doctype html><html lang="sk"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#123a52"><title>SmartMic TF220</title>
+UI = """<!doctype html><html lang="sk"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#123a52"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icon-192.png"><title>SmartMic TF220</title>
 <style>body{background:#f2f6f8;font:16px system-ui,Arial;color:#16394b;margin:0}.wrap{max-width:550px;margin:auto;padding:20px}header{background:#123a52;color:white;padding:20px;border-radius:16px;margin-bottom:20px}h1{margin:5px 0;font-size:28px}small{opacity:.8}section{background:white;border-radius:16px;padding:20px;margin:15px 0;box-shadow:0 3px 16px #162d4012}label{display:block;font-weight:600;margin:14px 0}input{display:block;width:100%;box-sizing:border-box;padding:13px;border:1px solid #b7c6cd;border-radius:10px;font:inherit;margin-top:7px}button{width:100%;background:#0b6776;color:white;padding:16px;border:0;border-radius:11px;font:inherit;font-weight:700;margin-top:10px}button:disabled{opacity:.6}.big{font-size:42px;font-weight:800;color:#0b6776}.muted{color:#52656e}#result{display:none}.warn{background:#fff3d8;padding:13px;border-radius:10px}.err{color:#b31919;white-space:pre-wrap}</style>
 <div class="wrap"><header><div>HOFITECH · SmartMic</div><h1>TF220 Flow Analyzer</h1><small>PTFE · 0,793 l / hlavný takt</small></header><section><h2>Analyzovať nahrávku</h2><p class="muted">Nahraj 20–30 sekúnd videa čerpadla. Zvuk automaticky analyzuje server.</p><form id="f"><label>Video alebo audio<input required type="file" name="video" accept="video/*,audio/*,.mp4,.mov,.m4a,.wav"></label><label>Minúta filtrácie<input type="number" name="minute" min="0" step="0.5" inputmode="decimal" placeholder="napr. 29"></label><label>Prístupový kód<input type="password" name="access_code" required autocomplete="off"></label><label>Tlak vody (bar), voliteľné<input type="number" name="pressure_water" min="0" max="30" step="0.1" inputmode="decimal"></label><button id="b">Analyzovať</button></form><p id="error" class="err"></p></section><section id="result"><h2>Výsledok</h2><div class="big" id="q">–</div><p id="info"></p><p id="press"></p><p id="confidence" class="warn"></p><p class="muted">Nominálny akustický prietok. Hodnota sama osebe nie je pokynom zastaviť lis.</p></section></div>
-<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const f=e.target,b=document.getElementById('b'),err=document.getElementById('error');err.textContent='';b.disabled=true;b.textContent='Analyzujem…';try{let r=await fetch('/api/analyze',{method:'POST',body:new FormData(f)});let x=await r.json();if(!r.ok)throw Error(x.detail||'Chyba');document.getElementById('result').style.display='block';document.getElementById('q').textContent=x.nominal_flow_lpm.toFixed(1).replace('.',',')+' l/min';document.getElementById('info').textContent='Hlavný takt '+x.main_period_s.toFixed(2)+' s · '+x.strokes_per_min.toFixed(1)+' taktov/min';document.getElementById('press').textContent=x.pressure_water_bar==null?'Tlak vody nezadaný':'Tlak vody '+x.pressure_water_bar+' bar · P/Q '+x.resistance_index.toFixed(3);document.getElementById('confidence').textContent='Spoľahlivosť: '+x.confidence+' · '+x.message;document.getElementById('result').scrollIntoView({behavior:'smooth'});}catch(ex){err.textContent=ex.message;}finally{b.disabled=false;b.textContent='Analyzovať'}};</script></html>"""
+<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const f=e.target,b=document.getElementById('b'),err=document.getElementById('error');err.textContent='';b.disabled=true;b.textContent='Analyzujem…';try{let r=await fetch('/api/analyze',{method:'POST',body:new FormData(f)});let x=await r.json();if(!r.ok)throw Error(x.detail||'Chyba');document.getElementById('result').style.display='block';document.getElementById('q').textContent=x.nominal_flow_lpm.toFixed(1).replace('.',',')+' l/min';document.getElementById('info').textContent='Hlavný takt '+x.main_period_s.toFixed(2)+' s · '+x.strokes_per_min.toFixed(1)+' taktov/min';document.getElementById('press').textContent=x.pressure_water_bar==null?'Tlak vody nezadaný':'Tlak vody '+x.pressure_water_bar+' bar · P/Q '+x.resistance_index.toFixed(3);document.getElementById('confidence').textContent='Spoľahlivosť: '+x.confidence+' · '+x.message;document.getElementById('result').scrollIntoView({behavior:'smooth'});}catch(ex){err.textContent=ex.message;}finally{b.disabled=false;b.textContent='Analyzovať'}};</script><script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("/sw.js").catch(()=>{}));}</script></html>"""
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return JSONResponse({
+        "id":"/","name":"SmartMic TF220 Flow Analyzer","short_name":"SmartMic TF220",
+        "description":"HOFITECH acoustic flow analyzer for Tapflo TF220 PTFE pumps",
+        "start_url":"/","scope":"/","display":"standalone",
+        "background_color":"#f2f6f8","theme_color":"#123a52",
+        "icons":[{"src":"/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},{"src":"/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}]
+    },media_type="application/manifest+json")
+
+@app.get("/sw.js")
+def sw():
+    return Response("""self.addEventListener('install',e=>self.skipWaiting());
+self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch',e=>{if(e.request.method==='GET'&&e.request.mode==='navigate'){
+ e.respondWith(fetch(e.request).catch(()=>new Response('SmartMic vyzaduje internetove pripojenie.',{status:503,headers:{'Content-Type':'text/plain; charset=utf-8'}})));
+}});""",media_type="application/javascript",headers={"Cache-Control":"no-store"})
+
+def png_icon(size):
+    def chunk(typ,data):
+        return struct.pack("!I",len(data))+typ+data+struct.pack("!I",zlib.crc32(typ+data)&0xffffffff)
+    lines=[]
+    for y in range(size):
+        row=bytearray()
+        for x in range(size):
+            dx=x-size/2;dy=y-size/2
+            if abs(dx)<size*.36 and abs(dy)<size*.36:
+                # stylized central flowing waveform over teal panel
+                h=size*.125
+                active= abs(dy-0.11*size*np.sin((x/size)*13.0))<h*.52
+                rgb=(78,211,209) if active else (12,104,120)
+            else:
+                rgb=(18,58,82)
+            row.extend(rgb)
+        lines.append(b"\\x00"+bytes(row))
+    data=zlib.compress(b"".join(lines),9)
+    return b"\\x89PNG\\r\\n\\x1a\\n"+chunk(b"IHDR",struct.pack("!2I5B",size,size,8,2,0,0,0))+chunk(b"IDAT",data)+chunk(b"IEND",b"")
+
+@app.get("/icon-{size}.png")
+def icon(size:int):
+    if size not in (192,512): raise HTTPException(404)
+    return Response(png_icon(size),media_type="image/png",headers={"Cache-Control":"public, max-age=86400"})
+
 @app.get("/",response_class=HTMLResponse)
 def home(): return UI
 @app.get("/health")
