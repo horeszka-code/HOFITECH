@@ -1,8 +1,10 @@
 """SmartMic TF220: mobile operator web analyzer. PTFE calibrated nominal 0.793 L/main stroke."""
-import asyncio, os, secrets, tempfile, subprocess
+import asyncio, os, secrets, tempfile, subprocess, hmac, hashlib, base64, time
+from collections import defaultdict
 from pathlib import Path
 import numpy as np
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 import struct, zlib
 from scipy.signal import butter, sosfiltfilt, find_peaks, correlate
@@ -10,11 +12,31 @@ from scipy.ndimage import gaussian_filter1d
 app = FastAPI(docs_url=None, redoc_url=None)
 STROKE_L = 0.793
 ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
+ACCESS_PIN = os.environ.get("ACCESS_PIN", "")
+TOKEN_SECRET = os.environ.get("TOKEN_SECRET", "")
+FAILURES = defaultdict(list)
+COOKIE_NAME = "smartmic_session"
+SESSION_DAYS = 180
 MAX_MB = 65
 UI = """<!doctype html><html lang="sk"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#123a52"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icon-192.png"><title>SmartMic TF220</title>
-<style>body{background:#f2f6f8;font:16px system-ui,Arial;color:#16394b;margin:0}.wrap{max-width:550px;margin:auto;padding:20px}header{background:#123a52;color:white;padding:20px;border-radius:16px;margin-bottom:20px}h1{margin:5px 0;font-size:28px}small{opacity:.8}section{background:white;border-radius:16px;padding:20px;margin:15px 0;box-shadow:0 3px 16px #162d4012}label{display:block;font-weight:600;margin:14px 0}input{display:block;width:100%;box-sizing:border-box;padding:13px;border:1px solid #b7c6cd;border-radius:10px;font:inherit;margin-top:7px}button{width:100%;background:#0b6776;color:white;padding:16px;border:0;border-radius:11px;font:inherit;font-weight:700;margin-top:10px}button:disabled{opacity:.6}.big{font-size:42px;font-weight:800;color:#0b6776}.muted{color:#52656e}#result{display:none}.warn{background:#fff3d8;padding:13px;border-radius:10px}.err{color:#b31919;white-space:pre-wrap}</style>
-<div class="wrap"><header><div>HOFITECH · SmartMic</div><h1>TF220 Flow Analyzer</h1><small>PTFE · 0,793 l / hlavný takt</small></header><section><h2>Analyzovať nahrávku</h2><p class="muted">Nahraj 20–30 sekúnd videa čerpadla. Zvuk automaticky analyzuje server.</p><form id="f"><label>Video alebo audio<input required type="file" name="video" accept="video/*,audio/*,.mp4,.mov,.m4a,.wav"></label><label>Minúta filtrácie<input type="number" name="minute" min="0" step="0.5" inputmode="decimal" placeholder="napr. 29"></label><label>Prístupový kód<input type="password" name="access_code" required autocomplete="off"></label><label>Tlak vody (bar), voliteľné<input type="number" name="pressure_water" min="0" max="30" step="0.1" inputmode="decimal"></label><button id="b">Analyzovať</button></form><p id="error" class="err"></p></section><section id="result"><h2>Výsledok</h2><div class="big" id="q">–</div><p id="info"></p><p id="press"></p><p id="confidence" class="warn"></p><p class="muted">Nominálny akustický prietok. Hodnota sama osebe nie je pokynom zastaviť lis.</p></section></div>
-<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const f=e.target,b=document.getElementById('b'),err=document.getElementById('error');err.textContent='';b.disabled=true;b.textContent='Analyzujem…';try{let r=await fetch('/api/analyze',{method:'POST',body:new FormData(f)});let x=await r.json();if(!r.ok)throw Error(x.detail||'Chyba');document.getElementById('result').style.display='block';document.getElementById('q').textContent=x.nominal_flow_lpm.toFixed(1).replace('.',',')+' l/min';document.getElementById('info').textContent='Hlavný takt '+x.main_period_s.toFixed(2)+' s · '+x.strokes_per_min.toFixed(1)+' taktov/min';document.getElementById('press').textContent=x.pressure_water_bar==null?'Tlak vody nezadaný':'Tlak vody '+x.pressure_water_bar+' bar · P/Q '+x.resistance_index.toFixed(3);document.getElementById('confidence').textContent='Spoľahlivosť: '+x.confidence+' · '+x.message;document.getElementById('result').scrollIntoView({behavior:'smooth'});}catch(ex){err.textContent=ex.message;}finally{b.disabled=false;b.textContent='Analyzovať'}};</script><script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("/sw.js").catch(()=>{}));}</script></html>"""
+<style>body{background:#f2f6f8;font:16px system-ui,Arial;color:#16394b;margin:0}.wrap{max-width:550px;margin:auto;padding:20px} #accessGate{display:none} #analysisPanel{display:none} header{background:#123a52;color:white;padding:20px;border-radius:16px;margin-bottom:20px}h1{margin:5px 0;font-size:28px}small{opacity:.8}section{background:white;border-radius:16px;padding:20px;margin:15px 0;box-shadow:0 3px 16px #162d4012}label{display:block;font-weight:600;margin:14px 0}input{display:block;width:100%;box-sizing:border-box;padding:13px;border:1px solid #b7c6cd;border-radius:10px;font:inherit;margin-top:7px}button{width:100%;background:#0b6776;color:white;padding:16px;border:0;border-radius:11px;font:inherit;font-weight:700;margin-top:10px}button:disabled{opacity:.6}.big{font-size:42px;font-weight:800;color:#0b6776}.muted{color:#52656e}#result{display:none}.warn{background:#fff3d8;padding:13px;border-radius:10px}.err{color:#b31919;white-space:pre-wrap}</style>
+<div class="wrap"><header><div>HOFITECH · SmartMic</div><h1>TF220 Flow Analyzer</h1><small>PTFE · 0,793 l / hlavný takt</small></header><section id="accessGate"><h2>Prvé prihlásenie</h2><p class="muted">Zadaj 4-miestny PIN. Tento telefón si zapamätá prihlásenie na 180 dní.</p><form id="pinForm"><label>4-miestny PIN<input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required></label><button id="pinButton">Prihlásiť sa</button></form><p id="pinError" class="err"></p></section><section id="analysisPanel"><h2>Analyzovať nahrávku</h2><p class="muted">Nahraj 20–30 sekúnd videa čerpadla. Zvuk automaticky analyzuje server.</p><form id="f"><label>Video alebo audio<input required type="file" name="video" accept="video/*,audio/*,.mp4,.mov,.m4a,.wav"></label><label>Minúta filtrácie<input type="number" name="minute" min="0" step="0.5" inputmode="decimal" placeholder="napr. 29"></label><label>Tlak vody (bar), voliteľné<input type="number" name="pressure_water" min="0" max="30" step="0.1" inputmode="decimal"></label><button id="b">Analyzovať</button></form><p id="error" class="err"></p></section><section id="result"><h2>Výsledok</h2><div class="big" id="q">–</div><p id="info"></p><p id="press"></p><p id="confidence" class="warn"></p><p class="muted">Nominálny akustický prietok. Hodnota sama osebe nie je pokynom zastaviť lis.</p></section></div>
+<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const f=e.target,b=document.getElementById('b'),err=document.getElementById('error');err.textContent='';b.disabled=true;b.textContent='Analyzujem…';try{let r=await fetch('/api/analyze',{method:'POST',body:new FormData(f)});let x=await r.json();if(!r.ok){if(r.status===401){document.getElementById('accessGate').style.display='block';document.getElementById('analysisPanel').style.display='none';}throw Error(x.detail||'Chyba');}document.getElementById('result').style.display='block';document.getElementById('q').textContent=x.nominal_flow_lpm.toFixed(1).replace('.',',')+' l/min';document.getElementById('info').textContent='Hlavný takt '+x.main_period_s.toFixed(2)+' s · '+x.strokes_per_min.toFixed(1)+' taktov/min';document.getElementById('press').textContent=x.pressure_water_bar==null?'Tlak vody nezadaný':'Tlak vody '+x.pressure_water_bar+' bar · P/Q '+x.resistance_index.toFixed(3);document.getElementById('confidence').textContent='Spoľahlivosť: '+x.confidence+' · '+x.message;document.getElementById('result').scrollIntoView({behavior:'smooth'});}catch(ex){err.textContent=ex.message;}finally{b.disabled=false;b.textContent='Analyzovať'}};</script><script>
+async function checkLogin(){
+ try{const r=await fetch('/api/session',{credentials:'same-origin',cache:'no-store'}),x=await r.json();
+ const ok=r.ok&&x.authenticated;document.getElementById('accessGate').style.display=ok?'none':'block';
+ document.getElementById('analysisPanel').style.display=ok?'block':'none';
+ }catch(e){document.getElementById('pinError').textContent='Nepodarilo sa pripojiť k serveru.';document.getElementById('accessGate').style.display='block';}
+}
+document.getElementById('pinForm').onsubmit=async function(e){
+ e.preventDefault();const b=document.getElementById('pinButton'),err=document.getElementById('pinError');err.textContent='';b.disabled=true;
+ try{const p=document.getElementById('pin').value;
+ const r=await fetch('/api/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});
+ const x=await r.json();if(!r.ok)throw Error(x.detail||'Nesprávny PIN.');
+ document.getElementById('pin').value='';await checkLogin();
+ }catch(e){err.textContent=e.message;}finally{b.disabled=false;}
+};checkLogin();
+</script><script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("/sw.js").catch(()=>{}));}</script></html>"""
 
 @app.get("/manifest.webmanifest")
 def manifest():
@@ -61,6 +83,44 @@ def icon(size:int):
 
 @app.get("/",response_class=HTMLResponse)
 def home(): return UI
+
+class PinPayload(BaseModel):
+    pin: str
+
+def session_ok(request:Request):
+    token=request.cookies.get(COOKIE_NAME,"")
+    try:
+        ts,mac=token.split(".",1)
+        timestamp=int(ts)
+        if not TOKEN_SECRET or timestamp<time.time()-SESSION_DAYS*86400 or timestamp>time.time()+300:return False
+        good=hmac.new(TOKEN_SECRET.encode(),ts.encode(),hashlib.sha256).hexdigest()
+        return hmac.compare_digest(good,mac)
+    except (ValueError,AttributeError):return False
+
+@app.get("/api/session")
+def get_session(request:Request):
+    return {"authenticated":session_ok(request)}
+
+@app.post("/api/login")
+def login(payload:PinPayload,request:Request):
+    if not ACCESS_PIN or len(ACCESS_PIN)!=4 or not ACCESS_PIN.isascii() or not ACCESS_PIN.isdigit() or not TOKEN_SECRET:
+        raise HTTPException(503,"Autentifikácia ešte nie je nakonfigurovaná.")
+    # Approximate in-memory guard; shared global cap also mitigates rotating-IP PIN guessing.
+    now=time.monotonic()
+    ip=request.client.host if request.client else "unknown"
+    for key,limit in ((ip,5),("__global__",40)):
+        FAILURES[key]=[x for x in FAILURES[key] if now-x<900]
+        if len(FAILURES[key])>=limit:raise HTTPException(429,"Priveľa pokusov. Skús znova o 15 minút.")
+    if len(payload.pin)!=4 or not hmac.compare_digest(payload.pin,ACCESS_PIN):
+        FAILURES[ip].append(now);FAILURES["__global__"].append(now)
+        raise HTTPException(403,"Nesprávny PIN.")
+    FAILURES.pop(ip,None)
+    ts=str(int(time.time()))
+    digest=hmac.new(TOKEN_SECRET.encode(),ts.encode(),hashlib.sha256).hexdigest()
+    response=JSONResponse({"authenticated":True})
+    response.set_cookie(COOKIE_NAME,ts+"."+digest,max_age=SESSION_DAYS*86400,secure=True,httponly=True,samesite="lax",path="/")
+    return response
+
 @app.get("/health")
 def health(): return {"status":"ok","protected":bool(ACCESS_CODE)}
 def analyze_audio(path):
@@ -91,9 +151,8 @@ def analyze_audio(path):
     confidence="nízka" if z[best]<.20 or ambiguous else "stredná" if z[best]<.55 else "vysoká"
     return {"main_period_s":T,"nominal_flow_lpm":60*STROKE_L/T,"strokes_per_min":60/T,"confidence":confidence,"autocorrelation_score":round(float(z[best]),3),"message":"Pri nejasnom signáli opakujte video." if confidence=="nízka" else "Kontrolujte trend, tlak a objem; pilotné meranie."}
 @app.post("/api/analyze")
-async def analyze(video:UploadFile=File(...), minute:float|None=Form(None), access_code:str=Form(""), pressure_water:float|None=Form(None)):
-    if not ACCESS_CODE: raise HTTPException(503,"Server ešte nemá nastavený prístupový kód.")
-    if not secrets.compare_digest(access_code,ACCESS_CODE): raise HTTPException(403,"Nesprávny prístupový kód.")
+async def analyze(request:Request, video:UploadFile=File(...), minute:float|None=Form(None), pressure_water:float|None=Form(None)):
+    if not session_ok(request): raise HTTPException(401,"Najskôr zadaj PIN.")
     ext=Path(video.filename or "").suffix.lower()
     if ext not in {".mp4",".mov",".m4a",".wav",".webm",".3gp",".mp3",".aac"}: raise HTTPException(415,"Nepodporovaný typ súboru.")
     with tempfile.TemporaryDirectory(prefix="smartmic_") as tmp:
