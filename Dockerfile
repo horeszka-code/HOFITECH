@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py .
+COPY app.py s10_model.py .
 RUN useradd -r -u 10001 appuser
 USER appuser
 ENV PORT=10000 PYTHONUNBUFFERED=1
