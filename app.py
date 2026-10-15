@@ -25,7 +25,7 @@ UI = """<!doctype html><html lang="sk"><meta charset="utf-8"><meta name="viewpor
 <div class="wrap"><header><div>HOFITECH · SmartMic</div><h1>TF220 Flow Analyzer</h1><small>PTFE · 0,793 l / hlavný takt</small></header><section id="accessGate"><h2>Prvé prihlásenie</h2><p class="muted">Zadaj 4-miestny PIN. Tento telefón si zapamätá prihlásenie na 180 dní.</p><form id="pinForm"><label>4-miestny PIN<input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required></label><button id="pinButton">Prihlásiť sa</button></form><p id="pinError" class="err"></p></section><section id="analysisPanel"><h2>Analyzovať nahrávku</h2><p class="muted">Nahraj 20–30 sekúnd videa čerpadla. Zvuk automaticky analyzuje server.</p><form id="f"><label>Video alebo audio<input required type="file" name="video" accept="video/*,audio/*,.mp4,.mov,.m4a,.wav"></label><label>Minúta filtrácie<input type="number" name="minute" min="0" step="0.5" inputmode="decimal" placeholder="napr. 29"></label><label>Tlak vody (bar), voliteľné<input type="number" name="pressure_water" min="0" max="30" step="0.1" inputmode="decimal"></label><button id="b">Analyzovať</button></form><p id="error" class="err"></p></section><section id="result"><h2>Výsledok</h2><div class="big" id="q">–</div><p id="info"></p><p id="press"></p><p id="confidence" class="warn"></p><p class="muted">Nominálny akustický prietok. Hodnota sama osebe nie je pokynom zastaviť lis.</p></section><section id="s10card"><h2>Skorá diagnostika S₁₀ (0–30 min)</h2>
 <p class="tiny">Pilotný semafor podľa Excelu HOFITECH. Nevyhodnocuje iba jednu nahrávku: potrebuje najmenej 4 merania tlaku, vrátane bodu po 20. minúte.</p>
 <div id="semastatus" class="sema gray">ČAKÁ NA DÁTA</div><div class="line"><span>S₁₀-30</span><strong id="s10value">—</strong></div>
-<div class="line"><span>Merania v úvodnom okne</span><strong id="pointcount">0</strong></div><div id="s10msg" class="tiny"></div>
+<div class="line"><span>Merania v úvodnom okne</span><strong id="pointcount">0</strong></div><div id="s10msg" class="tiny"></div><p id="forecast" class="tiny"></p>
 <p id="s10advice"></p>
 <div class="line"><span>Cyklus</span><input id="cycleId" value="CYKLUS 1" style="width:55%;margin:0;padding:7px"></div>
 <label>Tlak vzduchu (bar), voliteľné<input id="airpressure" type="number" step="0.1" min="0" max="15" placeholder="napr. 3,5"></label>
@@ -74,7 +74,7 @@ async function refreshS10(){
  out.textContent=x.semaphore;out.className='sema '+(x.semaphore==='ZELENÉ'?'green':x.semaphore==='ORANŽOVÉ'?'amber':x.semaphore==='ČERVENÉ'?'red':'gray');
  document.getElementById('s10value').textContent=x.s10===null?'—':x.s10.toFixed(3).replace('.',',')+' bar/min';
  document.getElementById('s10msg').textContent=x.message+(x.warnings&&x.warnings.length?' '+x.warnings.join('; '):'');
- document.getElementById('s10advice').textContent=x.advice||'';
+ document.getElementById('s10advice').textContent=x.advice||'';document.getElementById('forecast').textContent=x.pressure_prediction_bar?'Model tlaku pri 30. minúte: '+x.pressure_prediction_bar['30'].toFixed(2).replace('.',',')+' bar (iba orientačný Weibull fit; nie bezpečnostný limit).':'';
  }catch(e){out.textContent='DIAGNOSTIKA NEDOSTUPNÁ';out.className='sema gray';document.getElementById('s10msg').textContent=e.message;}
 }
 document.getElementById('saveMeasurement').onclick=()=>{
