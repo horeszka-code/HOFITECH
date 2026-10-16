@@ -195,8 +195,11 @@ def analyze_audio(path):
         c=correlate(env,env,method="fft",mode="full")[len(env)-1:]
         acfs.append((c/max(c[0],1e-12))*w)
     z=sum(acfs)
-    peaks,_=find_peaks(z,distance=26,prominence=.04)
-    peaks=[int(i) for i in peaks if 50<=i<=min(700,len(z)//3)]
+    # Main TF220 PTFE stroke can be faster than 0.5 s (e.g. 0.365 s = 130 l/min).
+    # Earlier 0.50 s lower bound suppressed the fundamental, yielding its 2T harmonic
+    # and under-reporting high flows by ~2x. 0.22 s allows up to ~216 l/min nominal.
+    peaks,_=find_peaks(z,distance=18,prominence=.04)
+    peaks=[int(i) for i in peaks if 22<=i<=min(700,len(z)//3)]
     if not peaks: raise ValueError("Pracovný takt sa nepodarilo spoľahlivo určiť.")
     candidates=sorted(peaks,key=lambda i:z[i],reverse=True)
     best=candidates[0]
