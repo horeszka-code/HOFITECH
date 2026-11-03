@@ -1,0 +1,26 @@
+{
+  "name": "SmartMic Test Forms – HOFITECH",
+  "short_name": "SmartMic Forms",
+  "description": "Offline DOCX záznamy priemyselných testov",
+  "start_url": "./",
+  "scope": "./",
+  "id": "./",
+  "display": "standalone",
+  "background_color": "#f5f7fa",
+  "theme_color": "#101d34",
+  "lang": "sk",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ]
+}
