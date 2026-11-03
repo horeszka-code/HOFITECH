@@ -1,0 +1,51 @@
+name: Build SmartMic Android APK
+on:
+  push:
+    branches: [smartmic-apk]
+    paths:
+      - 'smartmic-apk/**'
+      - '.github/workflows/build-smartmic-apk.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: smartmic-apk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Bundle offline assets
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          test -s dist/index.html
+      - name: Create Android project
+        run: npx cap add android
+      - name: Install native exporter
+        run: |
+          mkdir -p android/app/src/main/java/com/hofitech/smartmicforms
+          cp native/com/hofitech/smartmicforms/MainActivity.java android/app/src/main/java/com/hofitech/smartmicforms/MainActivity.java
+          cp native/com/hofitech/smartmicforms/SmartMicNativePlugin.java android/app/src/main/java/com/hofitech/smartmicforms/SmartMicNativePlugin.java
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartMic-Test-Forms-v0.2-debug-APK
+          path: smartmic-apk/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30

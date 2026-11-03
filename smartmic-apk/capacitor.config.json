@@ -1,0 +1,11 @@
+{
+  "appId": "com.hofitech.smartmicforms",
+  "appName": "SmartMic Test Forms",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
