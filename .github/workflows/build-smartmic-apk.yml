@@ -42,9 +42,17 @@ jobs:
         run: npx cap add android
       - name: Install native exporter
         run: |
-          mkdir -p android/app/src/main/java/com/hofitech/smartmicforms
-          cp native/com/hofitech/smartmicforms/MainActivity.java android/app/src/main/java/com/hofitech/smartmicforms/MainActivity.java
-          cp native/com/hofitech/smartmicforms/SmartMicNativePlugin.java android/app/src/main/java/com/hofitech/smartmicforms/SmartMicNativePlugin.java
+          mkdir -p android/app/src/main/java/com/hofitech/smartmicforms/v03
+          cp native/com/hofitech/smartmicforms/MainActivity.java android/app/src/main/java/com/hofitech/smartmicforms/v03/MainActivity.java
+          cp native/com/hofitech/smartmicforms/SmartMicNativePlugin.java android/app/src/main/java/com/hofitech/smartmicforms/v03/SmartMicNativePlugin.java
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('android/app/src/main/AndroidManifest.xml')
+          content = path.read_text()
+          permission = '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n'
+          assert '<application' in content
+          path.write_text(content.replace('<application', permission + '    <application', 1))
+          PY
       - name: Build debug APK
         run: |
           cd android
@@ -53,7 +61,7 @@ jobs:
           test -s app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: SmartMic-Test-Forms-v0.2-debug-APK
+          name: SmartMic-Test-Forms-v0.3-debug-APK
           path: smartmic-apk/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30

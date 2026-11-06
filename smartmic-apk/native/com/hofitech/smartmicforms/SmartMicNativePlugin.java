@@ -1,6 +1,8 @@
-package com.hofitech.smartmicforms;
+package com.hofitech.smartmicforms.v03;
 
+import android.Manifest;
 import android.content.ContentResolver;
+import android.media.MediaScannerConnection;
 import android.content.ContentValues;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -19,6 +21,9 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.PermissionState;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import org.json.JSONArray;
@@ -34,7 +39,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
-@CapacitorPlugin(name = "SmartMicNative")
+@CapacitorPlugin(name = "SmartMicNative", permissions = {
+    @Permission(alias = "galleryLegacy", strings = {Manifest.permission.WRITE_EXTERNAL_STORAGE})
+})
 public class SmartMicNativePlugin extends Plugin {
     private final Map<String, Transfer> transfers = new HashMap<>();
 
@@ -42,11 +49,13 @@ public class SmartMicNativePlugin extends Plugin {
         final Uri uri;
         final File file;
         final OutputStream stream;
+        final boolean gallery;
         long bytes;
-        Transfer(Uri uri, File file, OutputStream stream) {
+        Transfer(Uri uri, File file, OutputStream stream, boolean gallery) {
             this.uri = uri;
             this.file = file;
             this.stream = stream;
+            this.gallery = gallery;
         }
     }
 
@@ -57,32 +66,47 @@ public class SmartMicNativePlugin extends Plugin {
         return result.length() > 150 ? result.substring(result.length() - 150) : result;
     }
 
+    private static boolean isPhoto(String mime) {
+        return "image/jpeg".equals(mime) || "image/png".equals(mime) ||
+            "image/webp".equals(mime) || "image/heic".equals(mime) || "image/heif".equals(mime);
+    }
+
     private static String validMime(String mime) {
         if ("application/pdf".equals(mime) || "application/zip".equals(mime) ||
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(mime)) return mime;
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(mime) ||
+            isPhoto(mime)) return mime;
         throw new IllegalArgumentException("Nepodporovaný formát: " + mime);
     }
 
     private Transfer openPublicFile(String name, String mime) throws IOException {
         String fileName = validName(name);
         validMime(mime);
+        boolean gallery = isPhoto(mime);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContentResolver resolver = getContext().getContentResolver();
             ContentValues values = new ContentValues();
             values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
             values.put(MediaStore.MediaColumns.MIME_TYPE, mime);
-            values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/SmartMic");
+            values.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                (gallery ? Environment.DIRECTORY_PICTURES : Environment.DIRECTORY_DOWNLOADS) + "/SmartMic");
             values.put(MediaStore.MediaColumns.IS_PENDING, 1);
-            Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-            if (uri == null) throw new IOException("Nie je možné vytvoriť súbor v priečinku Downloads");
+            Uri collection = gallery ? MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                                     : MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+            Uri uri = resolver.insert(collection, values);
+            if (uri == null) throw new IOException("Nie je možné vytvoriť súbor");
             OutputStream output = resolver.openOutputStream(uri, "w");
-            if (output == null) { resolver.delete(uri, null, null); throw new IOException("Nie je možné otvoriť súbor"); }
-            return new Transfer(uri, null, output);
+            if (output == null) {
+                resolver.delete(uri, null, null);
+                throw new IOException("Nie je možné otvoriť súbor");
+            }
+            return new Transfer(uri, null, output, gallery);
         }
-        File dir = new File(getContext().getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "SmartMic");
+        File dir = gallery
+            ? new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "SmartMic")
+            : new File(getContext().getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "SmartMic");
         if (!dir.exists() && !dir.mkdirs()) throw new IOException("Nie je možné vytvoriť priečinok SmartMic");
         File file = new File(dir, fileName);
-        return new Transfer(null, file, new FileOutputStream(file));
+        return new Transfer(null, file, new FileOutputStream(file), gallery);
     }
 
     private void complete(Transfer t) throws IOException {
@@ -92,6 +116,8 @@ public class SmartMicNativePlugin extends Plugin {
             ContentValues done = new ContentValues();
             done.put(MediaStore.MediaColumns.IS_PENDING, 0);
             getContext().getContentResolver().update(t.uri, done, null, null);
+        } else if (t.gallery && t.file != null) {
+            MediaScannerConnection.scanFile(getContext(), new String[]{t.file.getAbsolutePath()}, null, null);
         }
     }
 
@@ -106,12 +132,23 @@ public class SmartMicNativePlugin extends Plugin {
         try {
             String name = validName(call.getString("fileName"));
             String mime = validMime(call.getString("mime"));
+            if (isPhoto(mime) && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                getPermissionState("galleryLegacy") != PermissionState.GRANTED) {
+                requestPermissionForAlias("galleryLegacy", call, "legacyGalleryPermission");
+                return;
+            }
             Transfer transfer = openPublicFile(name, mime);
             String token = UUID.randomUUID().toString();
             synchronized (transfers) { transfers.put(token, transfer); }
             JSObject response = new JSObject(); response.put("token", token);
             call.resolve(response);
         } catch (Exception ex) { call.reject("Export neúspešný: " + ex.getMessage()); }
+    }
+
+    @PermissionCallback
+    private void legacyGalleryPermission(PluginCall call) {
+        if (getPermissionState("galleryLegacy") == PermissionState.GRANTED) beginFile(call);
+        else call.reject("Uloženie do Galérie vyžaduje povolenie úložiska na Androide 9 a staršom.");
     }
 
     @PluginMethod
