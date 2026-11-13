@@ -53,7 +53,8 @@ const MIME_DOCX='application/vnd.openxmlformats-officedocument.wordprocessingml.
 const DOC_XML='word/document.xml', REL_XML='word/_rels/document.xml.rels';
 const $=s=>document.querySelector(s);
 const state={docxBuffer:null,fileName:'',schema:null,values:{},media:{},responsible:'',staff:'',extraNotes:'',busy:false};
-let dbPromise=null,saveTimer=null,noticeTimer=null;
+let dbPromise=null,saveTimer=null,noticeTimer=null,minuteBackupTimer=null,lastDraftSave=0;
+let thumbObjectURLs=[];
 const xesc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const q=s=>document.querySelector(s);
 const kids=(node,name)=>Array.from(node?.children||[]).filter(e=>e.localName===name);
@@ -131,14 +132,50 @@ function getDB(){if(!('indexedDB'in window))return Promise.resolve(null);if(!dbP
   req.onsuccess=()=>resolve(req.result);req.onerror=()=>resolve(null)
 });return dbPromise}
 async function persist(){
-  if(!state.docxBuffer)return;const db=await getDB();if(!db)return;
-  try{await new Promise((resolve,reject)=>{const tx=db.transaction('draft','readwrite');tx.objectStore('draft').put({docxBuffer:state.docxBuffer,fileName:state.fileName,values:state.values,media:state.media,responsible:state.responsible,staff:state.staff,extraNotes:state.extraNotes},'active');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});$('#draftStatus').textContent='Koncept uložený lokálne'}catch(e){console.warn('Auto-save',e);$('#draftStatus').textContent='Uloženie konceptu zlyhalo'}
+  if(!state.docxBuffer)return;
+  const db=await getDB();if(!db)throw Error('Lokálna databáza nie je dostupná');
+  try{
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction('draft','readwrite');
+      tx.objectStore('draft').put({
+        docxBuffer:state.docxBuffer,fileName:state.fileName,values:state.values,
+        media:state.media,responsible:state.responsible,staff:state.staff,
+        extraNotes:state.extraNotes,savedAt:new Date().toISOString(),draftVersion:4
+      },'active');
+      tx.oncomplete=resolve;
+      tx.onerror=()=>reject(tx.error||Error('Zápis do IndexedDB zlyhal'));
+      tx.onabort=()=>reject(tx.error||Error('Transakcia bola prerušená'));
+    });
+    lastDraftSave=Date.now();
+    $('#draftStatus').textContent='✓ Koncept uložený o '+new Date(lastDraftSave).toLocaleTimeString('sk-SK',{hour:'2-digit',minute:'2-digit'});
+  }catch(error){
+    console.error('SmartMic autosave',error);
+    $('#draftStatus').textContent='⚠ Záloha zlyhala – skontroluj pamäť zariadenia';
+    status('Nepodarilo sa zálohovať koncept. Uvoľni miesto a vykonaj SAVE.',true);
+    throw error;
+  }
 }
-function scheduleSave(){if(!state.docxBuffer)return;$('#draftStatus').textContent='Ukladám koncept…';clearTimeout(saveTimer);saveTimer=setTimeout(persist,700)}
+function startMinuteBackups(){
+  if(minuteBackupTimer)return;
+  // Overwrite one local IndexedDB draft every minute. No report export occurs here.
+  minuteBackupTimer=setInterval(()=>{
+    if(state.docxBuffer)persist().catch(e=>console.warn('Minute backup failed',e));
+  },60000);
+  document.addEventListener('visibilitychange',()=>{
+    if(state.docxBuffer&&document.visibilityState==='hidden')
+      persist().catch(e=>console.warn('Background backup failed',e));
+    if(state.docxBuffer&&document.visibilityState==='visible'&&Date.now()-lastDraftSave>60000)
+      persist().catch(e=>console.warn('Resume backup failed',e));
+  });
+  window.addEventListener('pagehide',()=>{
+    if(state.docxBuffer)persist().catch(e=>console.warn('Pagehide backup failed',e));
+  });
+}
+function scheduleSave(){if(!state.docxBuffer)return;$('#draftStatus').textContent='Ukladám koncept…';clearTimeout(saveTimer);saveTimer=setTimeout(()=>persist().catch(e=>console.warn('Edit backup failed',e)),700)}
 async function loadDraft(){const db=await getDB();if(!db)return;
   const saved=await new Promise(resolve=>{const req=db.transaction('draft').objectStore('draft').get('active');req.onsuccess=()=>resolve(req.result);req.onerror=()=>resolve(null)});
   if(!saved?.docxBuffer)return;
-  try{await loadDocument(saved.docxBuffer,saved.fileName,saved)}catch(e){console.warn(e);status('Rozpracovaný koncept sa nepodarilo obnoviť.',true)}
+  try{await loadDocument(saved.docxBuffer,saved.fileName,saved);status('Obnovený lokálny koncept'+(saved.savedAt?' z '+new Date(saved.savedAt).toLocaleString('sk-SK'):'')+'.')}catch(e){console.warn(e);status('Rozpracovaný koncept sa nepodarilo obnoviť.',true)}
 }
 async function loadDocument(buffer,name,draft=null){
   const zip=await JSZip.loadAsync(buffer),xmlFile=zip.file(DOC_XML);if(!xmlFile)throw new Error('Tento súbor nemá word/document.xml.');
@@ -406,9 +443,11 @@ async function init(){
     const view=e.target.closest('[data-preview]');if(view){const entry=state.media[view.dataset.preview]?.[Number(view.dataset.slot)];if(entry){const url=URL.createObjectURL(entry.blob);window.open(url,'_blank','noopener');setTimeout(()=>URL.revokeObjectURL(url),60000)}return}
   });
   if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./sw.js').catch(e=>console.warn(e));
-  await loadDraft()
+  await loadDraft();
+  startMinuteBackups();
+  if(navigator.storage?.persist)navigator.storage.persist().catch(()=>{});
 }
-window.SmartMicTest={parseForm,generateArchive,state,loadDocument,buildNativePdfReport};
+window.SmartMicTest={parseForm,generateArchive,state,loadDocument,buildNativePdfReport,persist,startMinuteBackups};
 document.addEventListener('DOMContentLoaded',init);
 </script>
 </body></html>
