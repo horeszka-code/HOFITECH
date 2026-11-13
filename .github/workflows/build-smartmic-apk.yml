@@ -43,9 +43,9 @@ jobs:
         run: npx cap add android
       - name: Install native exporter
         run: |
-          mkdir -p android/app/src/main/java/com/hofitech/smartmicforms/v03
-          cp native/com/hofitech/smartmicforms/MainActivity.java android/app/src/main/java/com/hofitech/smartmicforms/v03/MainActivity.java
-          cp native/com/hofitech/smartmicforms/SmartMicNativePlugin.java android/app/src/main/java/com/hofitech/smartmicforms/v03/SmartMicNativePlugin.java
+          mkdir -p android/app/src/main/java/com/hofitech/smartmicforms/v04
+          cp native/com/hofitech/smartmicforms/MainActivity.java android/app/src/main/java/com/hofitech/smartmicforms/v04/MainActivity.java
+          cp native/com/hofitech/smartmicforms/SmartMicNativePlugin.java android/app/src/main/java/com/hofitech/smartmicforms/v04/SmartMicNativePlugin.java
           python3 - <<'PY'
           from pathlib import Path
           path = Path('android/app/src/main/AndroidManifest.xml')
@@ -62,7 +62,7 @@ jobs:
           test -s app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: SmartMic-Test-Forms-v0.3-debug-APK
+          name: SmartMic-Test-Forms-v0.4-debug-APK
           path: smartmic-apk/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
