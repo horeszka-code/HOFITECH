@@ -36,6 +36,7 @@ jobs:
       - name: Bundle offline assets
         run: |
           npm install --no-audit --no-fund
+          node tests/check-v04.mjs
           npm run build
           test -s dist/index.html
       - name: Create Android project
