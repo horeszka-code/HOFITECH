@@ -123,6 +123,32 @@ function parseForm(xml){
     }
   }
   sections=sections.filter(s=>s.items.length>0);
+  // Precoat precedes Riedenie only in the application display; DOCX anchors are preserved.
+  const pre=sections.findIndex(x=>/^Precoat$/i.test(x.title));
+  const dil=sections.findIndex(x=>/^Riedenie$/i.test(x.title));
+  if(pre>=0&&dil>=0&&pre>dil){
+    const moved=sections.splice(pre,1)[0];sections.splice(dil,0,moved);
+  }
+  const jar=sections.findIndex(x=>/Jar testy/i.test(x.title));
+  if(jar>=0){
+    const extra={id:'sec-mixing-tank-v04',title:'Dávkovanie do miešacej nádrže',items:[]};
+    for(const [id,label] of [
+      ['mix-diatomite-v04','Kremelina – typ, dávka (g/L alebo kg)'],
+      ['mix-polymer-v04','Polymér – typ, dávka (g/m³)'],
+      ['mix-order-v04','Poradie pridávania a spôsob miešania'],
+      ['mix-state-v04','Stav vody a koagulátov v miešacej nádrži'],
+      ['mix-notes-v04','Pozorovania a poznámky k dávkovaniu']
+    ]){const field={id,kind:'text',label,anchor:null,virtual:true};extra.items.push(field);all.push(field)}
+    sections.splice(jar+1,0,extra);
+  }
+  const kal=sections.find(x=>/^Kal$/i.test(x.title));
+  if(kal){
+    const anchor=kal.items.find(x=>x.media?.type==='video')?.anchor||kal.items[0]?.anchor;
+    if(anchor){
+      const field={id:'kal-photo-v04',kind:'media',label:'Fotodokumentácia – kal a filtračné koláče',anchor:{...anchor},media:{type:'photo',anchor:{...anchor}},virtual:true};
+      kal.items.push(field);all.push(field);
+    }
+  }
   if(all.length===0)throw new Error('V dokumente sa nenašli rozpoznateľné polia formulára.');
   return {sections,items:all,paragraphs,testId,date,tableCount:tableEls.length};
 }
@@ -307,9 +333,10 @@ async function generateArchive(){
   const tables=kids(one(doc.documentElement,'body'),'tbl'),names=[],links=[],mediaLog=[];
   const suffix=safeName(state.schema.testId),stamp=dateStamp();let imageCount=0,videoCount=0;
   for(const field of state.schema.items){
-    const val=state.values[field.id],cell=cellAt(tables,field.anchor);
+    const val=state.values[field.id],cell=field.anchor?cellAt(tables,field.anchor):null;
     if(!cell)continue;
-    if(field.kind==='check'&&val===true)replaceCheck(cell);
+    if(field.kind==='parameter'&&(val===true||val===false))appendText(cell,val===true?'✓ Dodržané':'✕ Zmenené');
+    else if(field.kind==='check'&&val===true)replaceCheck(cell);
     else if((field.kind==='choice'||field.kind==='yesno')&&Number.isInteger(val)&&field.options[val]){
       const option=field.options[val];
       if(field.kind==='choice')prependMark(cellAt(tables,{...field.anchor,ci:option.ci}));
@@ -336,6 +363,16 @@ async function generateArchive(){
     }
   }
   const body=one(doc.documentElement,'body');
+  const mixing=state.schema.items.filter(field=>field.virtual&&field.id.startsWith('mix-')&&String(state.values[field.id]||'').trim());
+  if(mixing.length){
+    const section=one(body,'sectPr');
+    const addRow=(txt)=>{
+      const paragraph=doc.createElementNS(W,'w:p');
+      appendToParagraph(paragraph,txt);body.insertBefore(paragraph,section||null);
+    };
+    addRow('DÁVKOVANIE DO MIEŠACEJ NÁDRŽE – ZÁZNAM OPERÁTORA');
+    for(const field of mixing)addRow(field.label+': '+String(state.values[field.id]).trim());
+  }
   for(const p of kids(body,'p')){
     const t=docText(p);
     if(t==='Zodpovedná osoba:'&&state.responsible)appendToParagraph(p,' '+state.responsible);
