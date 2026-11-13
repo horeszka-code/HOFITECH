@@ -79,39 +79,41 @@
       const input=e.target.closest('label.media-slot')?.querySelector('input[data-file]');
       if(!input||choosingFile)return;
       const item=app()?.state.schema?.items?.find(i=>i.id===input.dataset.file);
-      if(item?.media?.type!=='photo')return;
+      if(!item?.media)return;
       e.preventDefault();e.stopImmediatePropagation();
-      chosenInput=input;open(picker);
+      chosenInput=input;
+      const video=item.media.type==='video';
+      picker.querySelector('h2').textContent=video?'Pridať video':'Pridať fotografiu';
+      picker.querySelector('[data-source="camera"]').textContent=video?'🎥 Natočiť video kamerou':'📷 Odfotiť fotoaparátom';
+      picker.querySelector('[data-source="gallery"]').textContent=video?'🖼️ Vybrať video z galérie':'🖼️ Vybrať fotografiu z galérie';
+      open(picker);
     },true);
     form.addEventListener('change',e=>{
       const input=e.target;if(!input.matches('input[data-file]'))return;
       const id=input.dataset.file,slot=Number(input.dataset.slot);
-      const item=app()?.state.schema?.items?.find(i=>i.id===id);
-      if(item?.media?.type!=='photo')return; // video behavior unchanged
-      e.stopImmediatePropagation(); // prevent old handler processing twice
+      const item=app()?.state.schema?.items?.find(x=>x.id===id);
+      if(!item?.media)return;
+      e.stopImmediatePropagation();
       const file=input.files?.[0];if(!file)return;
       Promise.resolve().then(async()=>{
-        await window.mediaChanged(e);
-        await window.persist(); // protect draft BEFORE writing to Gallery
-        let blob=file,mime=(file.type||'').toLowerCase();
         try{
-          if(!['image/jpeg','image/png','image/webp','image/heic','image/heif'].includes(mime)){
-            blob=(await window.jpegFromFile(file)).blob;mime='image/jpeg';
+          // mediaChanged compresses images and commits the draft before any preview.
+          const entry=await window.mediaChanged(e);
+          if(!entry)return;
+          if(item.media.type==='video'){msg('Video uložené do lokálneho konceptu.');return}
+          try{
+            const blob=entry.blob,mime='image/jpeg';
+            const date=new Date().toISOString().replace(/[-:.TZ]/g,'');
+            const name='SmartMic_'+safe(app().state.schema?.testId)+'_'+date+'_'+(slot+1)+'_'+Math.random().toString(36).slice(2,8)+'.jpg';
+            await window.nativeTransfer(blob,name,mime);
+            entry.gallerySaved=true;window.scheduleSave?.();
+            msg('Fotografia uložená do konceptu aj do Galérie (Obrázky/SmartMic).');
+          }catch(error){
+            console.warn('Native gallery copy failed',error);
+            msg('Fotografia je v koncepte, ale kópiu do Galérie sa nepodarilo uložiť: '+(error?.message||error),true);
           }
-          if(!window.SmartMicNative)throw Error('Natívne Android úložisko nie je dostupné');
-          const ext={'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/heic':'heic','image/heif':'heif'}[mime];
-          const date=new Date().toISOString().replace(/[-:.TZ]/g,'');
-          const test=safe(app().state.schema?.testId);
-          const name=`SmartMic_${test}_${date}_${slot+1}_${Math.random().toString(36).slice(2,9)}.${ext}`;
-          await window.nativeTransfer(blob,name,mime);
-          const entry=app().state.media[id]?.[slot];
-          if(entry?.blob===file){entry.gallerySaved=true;window.scheduleSave?.()}
-          msg('Fotografia je vo formulári aj v Galérii (Obrázky/SmartMic).');
-        }catch(error){
-          console.warn('SmartMic gallery write failed',error);
-          msg('Fotografia je bezpečne vo formulári, ale uloženie do Galérie zlyhalo: '+(error?.message||error),true);
-        }
-      }).catch(error=>{console.error(error);msg('Spracovanie fotografie zlyhalo: '+error.message,true)});
+        }catch(error){console.error('SmartMic media import failed',error);msg('Prílohu sa nepodarilo uložiť. Skontroluj miesto v zariadení: '+(error?.message||error),true)}
+      });
     },true);
   }
   document.addEventListener('DOMContentLoaded',setup);
