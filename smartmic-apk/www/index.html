@@ -263,10 +263,17 @@ function inputChanged(e){const input=e.target;if(!input.dataset?.input)return;
 }
 async function mediaChanged(e){const el=e.target;if(!el.dataset.file)return;
   const f=el.files?.[0];if(!f)return;const id=el.dataset.file,slot=Number(el.dataset.slot),item=state.schema.items.find(x=>x.id===id);
-  if(!item)return;const wantVideo=item.media.type==='video';
-  if((wantVideo&&!f.type.startsWith('video/'))||(!wantVideo&&!f.type.startsWith('image/'))){status('Vybraný súbor nemá správny formát.',true);return}
-  const arr=state.media[id]||[];arr[slot]={blob:f,fileName:f.name||`${wantVideo?'video':'foto'}_${slot+1}`,mime:f.type||'',stamp:new Date().toISOString()};state.media[id]=arr;
-  const anchor=document.scrollingElement.scrollTop;render();document.scrollingElement.scrollTop=anchor;scheduleSave();status((wantVideo?'Video':'Fotografia')+' bolo priradené k úlohe.');
+  if(!item)return;const wantVideo=item.media?.type==='video';
+  if((wantVideo&&!f.type.startsWith('video/'))||(!wantVideo&&!f.type.startsWith('image/'))){status('Nesprávny typ súboru.',true);return}
+  const savedBlob=wantVideo?f:(await jpegFromFile(f,2200,0.85)).blob;
+  if(!savedBlob?.size)throw Error('Príloha nie je čitateľná');
+  const previous=state.media[id]||[],copy=previous.slice();
+  copy[slot]={blob:savedBlob,fileName:f.name||('Foto_'+(slot+1)),mime:wantVideo?(f.type||'video/mp4'):'image/jpeg',stamp:new Date().toISOString()};
+  state.media[id]=copy;
+  try{await persist()}catch(e){state.media[id]=previous;throw Error('Nedá sa uložiť príloha do pamäte: '+(e?.message||e))}
+  const y=document.scrollingElement.scrollTop;render();document.scrollingElement.scrollTop=y;
+  status((wantVideo?'Video':'Fotografia')+' bolo uložené do konceptu.');
+  return copy[slot];
 }
 function appendText(node,txt,front=false){
   if(!txt)return;const d=node.ownerDocument,p=d.createElementNS(W,'w:p'),r=d.createElementNS(W,'w:r'),t=d.createElementNS(W,'w:t');t.setAttributeNS('http://www.w3.org/XML/1998/namespace','xml:space','preserve');t.textContent=txt;r.appendChild(t);p.appendChild(r);
@@ -316,7 +323,7 @@ function addPicture(cell,rid,docId,ratio,widthCm,besidePrevious=false){
   const r=d.createElementNS(W,'w:r'),drawing=xmlParse(drawingXml(rid,docId,cm(widthCm),cm(Math.max(1.2,Math.min(6,widthCm/ratio))))).documentElement;
   r.appendChild(d.importNode(drawing,true));p.appendChild(r)
 }
-async function jpegFromFile(blob){
+async function jpegFromFile(blob,maxDimension=1500,jpegQuality=0.82){
   if(!blob.type.startsWith('image/'))throw new Error('Neplatná fotografia.');
   let bitmap=null,url=null,im=null;
   try{
@@ -324,9 +331,9 @@ async function jpegFromFile(blob){
     else{url=URL.createObjectURL(blob);im=new Image();im.src=url;await im.decode()}
     const width=bitmap?.width||im.naturalWidth,height=bitmap?.height||im.naturalHeight;
     if(!width||!height)throw new Error('Nedá sa dekódovať obrázok.');
-    const max=1500,ratio=Math.min(1,max/Math.max(width,height)),canvas=document.createElement('canvas');canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);
+    const max=maxDimension,ratio=Math.min(1,max/Math.max(width,height)),canvas=document.createElement('canvas');canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);
     const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(bitmap||im,0,0,canvas.width,canvas.height);
-    const out=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.82));if(!out)throw new Error('Neplatný obrázok');
+    const out=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',jpegQuality));if(!out)throw new Error('Neplatný obrázok');
     return {blob:out,ratio:width/height}
   }finally{bitmap?.close?.();if(url)URL.revokeObjectURL(url)}
 }
@@ -356,7 +363,14 @@ async function generateArchive(){
     for(let k=0;k<attachments.length;k++){
       const attach=attachments[k];if(!attach)continue;
       if(field.media.type==='photo'){
-        const res=await jpegFromFile(attach.blob),name=`smartmic_${suffix}_${++imageCount}.jpg`,rid=addRel(rels,`${R}/image`,`media/${name}`);
+        if(!(attach.blob instanceof Blob)||!attach.blob.size)continue;
+        let res;
+        try{res=await jpegFromFile(attach.blob)}catch(error){
+          console.warn('Unreadable DOCX photo',field.id,k,error);
+          appendText(target,'⚠ Fotografia '+(k+1)+' je nečitateľná; originál zostáva v lokálnom koncepte.');
+          continue;
+        }
+        const name=`smartmic_${suffix}_${++imageCount}.jpg`,rid=addRel(rels,`${R}/image`,`media/${name}`);
         zip.file('word/media/'+name,res.blob);addJpegType(types);
         const narrowCell=field.media.anchor.ri===field.anchor.ri&&field.kind==='choice';
         addPicture(target,rid,3000+imageCount,res.ratio,narrowCell?1.75:3.8,!narrowCell&&(photosInField%2===1));photosInField++;
@@ -422,14 +436,16 @@ async function buildNativePdfReport(){
     const rows=[];
     for(const item of section.items){
       const value=state.values[item.id];let display='';
-      if(item.kind==='check')display=value===true?'✓ Vykonané':'☐ Nepotvrdené';
+      if(item.kind==='parameter')display=value===true?'✓ Dodržané':value===false?'✕ Zmenené':'';
+      else if(item.kind==='check')display=value===true?'✓ Vykonané':'☐ Nepotvrdené';
       else if((item.kind==='choice'||item.kind==='yesno')&&Number.isInteger(value))display=item.options?.[value]?.label||'';
       else if(typeof value==='string')display=value;
       const photos=[],videos=[];
       if(item.media){for(let i=0;i<8;i++){
         const media=state.media[item.id]?.[i];if(!media)continue;
         if(item.media.type==='photo'){
-          const b64=await pdfPhotoBase64(media.blob);if(b64)photos.push({slot:i+1,data:b64});
+          try{const b64=await pdfPhotoBase64(media.blob);if(b64)photos.push({slot:i+1,data:b64})}
+          catch(error){console.warn('Unreadable PDF photo',item.id,i,error);photos.push({slot:i+1,name:'⚠ Fotografia sa nedá dekódovať'})}
         }else videos.push({slot:i+1,name:media.fileName||`Video ${i+1}`});
       }}
       rows.push({label:item.label,kind:item.kind,expected:item.expected||'',unit:item.unit||'',value:display,photos,videos});
@@ -457,7 +473,8 @@ async function nativeTransfer(blob,fileName,mime){
 async function save(){if(state.busy||!state.schema)return;state.busy=true;
   const buttons=[$('#saveBottom'),$('#saveFloating')];for(const b of buttons){b.disabled=true;b.textContent='Pripravujem DOCX + PDF…'}
   try{
-    await persist();const result=await generateArchive();
+    try{await persist()}catch(e){if(!confirm('Lokálny koncept sa nepodarilo zálohovať. Pokračovať v okamžitom exporte DOCX/PDF?'))return;}
+    const result=await generateArchive();
     if(!window.SmartMicNative){throw new Error('Natívna Android služba nie je dostupná. Spusti aplikáciu ako APK.');}
     await nativeTransfer(result.docxBlob,result.docxName,MIME_DOCX);
     const pdfName=result.docxName.replace(/\.docx$/i,'.pdf');
