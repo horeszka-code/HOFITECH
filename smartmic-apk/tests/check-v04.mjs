@@ -1,0 +1,17 @@
+import {readFileSync} from 'node:fs';
+import {Script} from 'node:vm';
+import assert from 'node:assert/strict';
+const html=readFileSync(new URL('../www/index.html',import.meta.url),'utf8');
+const media=readFileSync(new URL('../www/photo-upgrades.js',import.meta.url),'utf8');
+const conf=JSON.parse(readFileSync(new URL('../capacitor.config.json',import.meta.url),'utf8'));
+const pkg=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+assert.equal(conf.appId,'com.hofitech.smartmicforms.v04');
+assert.equal(pkg.version,'0.4.0');
+const scripts=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(x=>x[1]).filter(x=>x.trim());
+assert.ok(scripts.length>=2,'inline JSZip and main script missing');
+for(const script of scripts)new Script(script,{filename:'index.html inline JS'});
+new Script(media,{filename:'photo-upgrades.js'});
+for(const x of ['startMinuteBackups','60000','savedAt:new Date().toISOString()',"'active'",'visibilitychange','Dávkovanie do miešacej nádrže',"/^Precoat$/i",'✕ Zmenené',"id:'kal-photo-v04'",'thumbObjectURLs','textarea rows']) assert.ok(html.includes(x),'Missing '+x);
+for(const x of ['Vybrať video z galérie','await window.mediaChanged(e)','← Späť k formuláru'])assert.ok(media.includes(x),'Missing '+x);
+assert.ok(html.includes('async function generateArchive()')&&html.includes('async function buildNativePdfReport()'));
+console.log('PASS SmartMic v0.4 syntax and offline-save static checks');
