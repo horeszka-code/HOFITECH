@@ -1,4 +1,4 @@
-package com.hofitech.smartmicforms.v03;
+package com.hofitech.smartmicforms.v04;
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
