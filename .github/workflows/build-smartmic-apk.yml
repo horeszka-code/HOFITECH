@@ -1,7 +1,7 @@
 name: Build SmartMic Android APK
 on:
   push:
-    branches: [smartmic-apk]
+    branches: [smartmic-apk-v04]
     paths:
       - 'smartmic-apk/**'
       - '.github/workflows/build-smartmic-apk.yml'
