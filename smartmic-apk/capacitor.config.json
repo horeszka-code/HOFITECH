@@ -1,6 +1,6 @@
 {
-  "appId": "com.hofitech.smartmicforms.v03",
-  "appName": "SmartMic Forms v0.3",
+  "appId": "com.hofitech.smartmicforms.v04",
+  "appName": "SmartMic Forms v0.4",
   "webDir": "dist",
   "android": {
     "allowMixedContent": false
